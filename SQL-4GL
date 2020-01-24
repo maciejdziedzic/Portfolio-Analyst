@@ -202,7 +202,6 @@ proc sql noprint;
  
 
 proc sql noprint;
-
    select count(*) into : ilosc_agent
     from &&zb&i. t1, work.slo t2
       where (t1.DEALER_ID_BS = t2.RAPORTOWANA_NA AND t1.DEALER_ID_BS = t2.DEALER_ID
