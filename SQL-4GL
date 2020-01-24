@@ -1,0 +1,254 @@
+*/ Importing last accepted result of a model
+
+PROC SQL;
+
+   CREATE TABLE WORK.tmp1 AS
+
+   SELECT t1.SET_RESULT,
+          t1.LOAD_ID,
+          t1.PERIOD_ID,
+          t1.MODEL_GROUP_ID,
+          t1.DESCRIPTION,
+          t1.STATUS_ID,
+          t1.MODE,
+          t1.LIBRARY_NAME,
+          t1.TABLE_NAME,
+          t1.REPORT_PATH,
+          t1.CREATED_DTTM,
+          t1.MODEL_ID,
+          t1.CORRECTED_LIBRARY_NAME,
+          t1.CORRECTED_TABLE_NAME,
+          t2.NAME,
+          t2.OBJECT_TYPE_ID
+
+      FROM SETTLEMENT_RESULT t1
+		LEFT JOIN SPEED_MD.STATUS t2 ON (t1.STATUS_ID = t2.STATUS_ID)
+			WHERE t1.CORRECTED_TABLE_NAME NOT IS missing;
+
+ 
+
+proc sql;      
+
+   CREATE TABLE WORK.tmp2 AS
+   SELECT t1.SET_RESULT
+          t1.STATUS_ID,
+          t1.STATUS_DTTM,
+          t1.USER_ID,
+          t1.DESCRIPTION,
+          t2.NAME,
+          t2.OBJECT_TYPE_ID
+
+      FROM SPEED_MD.SETTLEMENT_STATE t1
+		LEFT JOIN SPEED_MD.STATUS t2 ON (t1.STATUS_ID = t2.STATUS_ID);
+
+ 
+
+ 
+
+proc sql;         
+
+   CREATE TABLE WORK.tmp3 AS
+   SELECT DISTINCT t1.SET_RESULT,
+
+          t1.LOAD_ID,
+          t1.PERIOD_ID,
+          t1.MODEL_GROUP_ID,
+          t3.NAME,
+          t3.DESCRIPTION,
+          t3.CODE,
+          t1.STATUS_ID,
+          t1.MODE,
+          t1.LIBRARY_NAME,
+          t1.TABLE_NAME,
+          t1.REPORT_PATH,
+          t1.CREATED_DTTM,
+          t1.MODEL_ID,
+          t1.CORRECTED_LIBRARY_NAME,
+          t1.CORRECTED_TABLE_NAME,
+          t1.OBJECT_TYPE_ID,
+          t2.STATUS_DTTM,
+          t2.USER_ID,
+          t2.NAME AS STATUS
+
+      FROM WORK.tmp1 t1, WORK.tmp2 t2, SPEED_MD.MODEL_GROUP t3
+        WHERE (t1.SET_RESULT = t2.SET_RESULT AND t1.MODEL_GROUP_ID = t3.MODEL_GROUP_ID) AND
+			  (t1.LIBRARY_NAME = 'roz' AND t1.NAME = 'CORRECT' AND t3.NAME = "&MODEL." AND
+			  (t2.NAME = 'ACCEPTED' OR t2.NAME = 'CREATED' OR t2.NAME = 'CONFIRMED' ));
+
+ 
+
+proc sql;
+
+*/ Taking into account last model by maximizing value of the last result in a specific time frame     
+
+   CREATE TABLE WORK.tmp4 as
+   SELECT
+          (MAX(t1.SET_RESULT)) FORMAT=16. AS MAX_of_SET_RESULT,
+          t1.MODEL_GROUP_ID, t1.PERIOD_ID
+          
+      FROM WORK.tmp3 t1
+        GROUP BY t1.MODEL_GROUP_ID,
+               t1.PERIOD_ID;
+
+proc sql;              
+
+   CREATE TABLE WORK.QUERY_ALL AS
+    SELECT DISTINCT t1.LIBRARY_NAME,
+          t1.NAME,
+          t1.PERIOD_ID,
+
+            (Coalesce (t1.CORRECTED_TABLE_NAME, t1.TABLE_NAME)) AS new_name
+
+      FROM WORK.tmp3 t1, WORK.tmp4 t2
+		WHERE (t1.MODEL_GROUP_ID = t2.MODEL_GROUP_ID AND t1.SET_RESULT = t2.MAX_of_SET_RESULT AND t1.PERIOD_ID = t2.PERIOD_ID)
+		  AND t1.name	IN ('model1', 'model2', 'model3', 'model4', 'model5', 'model6', 'model7', 'model8')
+				order by NAME, PERIOD_ID;
+
+QUIT;
+
+ 
+*/ Implementing new variable - month
+data work.query_all;
+set work.query_all;
+month = put(period_id, $8.);
+drop period_id;
+month = substr(month,1,6);
+run;
+
+data _null_;
+
+*/ Calling symput the column which represents the amount of commision per model
+if "&MODEL."="model1" then call symput("PROWIZJA", "PR_MC");
+if "&MODEL."="model2" then call symput("PROWIZJA", "TOTAL_HANDL_AGENT");
+if "&MODEL."="model3" then call symput("PROWIZJA", "PR_DO_WYPLATY");
+if "&MODEL."="model4" then call symput("PROWIZJA", "KWOTA_WYPLATY_CHAT");
+if "&MODEL."="model5" then call symput("PROWIZJA", "PROWIZJA_TOTAL");
+if "&MODEL."="model6" then call symput("PROWIZJA", "PR_MC");
+if "&MODEL."="model7" then call symput("PROWIZJA", "PR_MC");
+if "&MODEL."="model8" then call symput("PROWIZJA", "PR_TOTAL");
+if "&MODEL."="model9" then call symput("PROWIZJA", "PR_DO_WYPLATY");
+
+ 
+*/ Summing amount of commision and volume of sale, monthly, per model, using valid sales codes.
+
+options mprint symbolgen mlogic; 
+%macro samp;
+
+%if %sysfunc(exist(WORK.QUERY_ALL)) %then %do;
+data period;
+set work.query_all;
+format PROWIZJA 12.1;
+format WOLUMEN 12.;
+format PROWIZJA_AGENT 12.2;
+format WOLUMEN_AGENT 12.;
+run;
+
+%end;
+
+%else %do;
+data _null_;
+
+run;
+
+%end;
+
+proc sql noprint;
+select count(*) into: nobs
+from work.period
+quit;
+ 
+data slo;
+set dict.slo_deal;
+where date_to>'31dec2020:0:0:0'dt and valid_to_dttm>'31dec2020:0:0:0'dt;
+run;
+
+%do i=%eval(&nobs.-12) %to &nobs.;
+
+    %let zb&i.= _null_;
+    %let na&i. = _null_;
+
+data period;
+set work.period;
+
+if _n_ = &i. then call symput('zb'||strip(&i.),'roz_ptk.'||new_name);
+if _n_ = &i. then call symput('na'||strip(&i.),new_name);
+
+run;
+
+proc sql noprint;
+
+   select sum(&PROWIZJA.) into : pr_do_wyplaty
+   from &&zb&i.;
+
+proc sql noprint;
+
+   select count(*) into : wolumen
+	 from &&zb&i.
+		where _delta is missing AND &prowizja. is not missing;
+ 
+
+proc sql noprint;
+update work.period set  PROWIZJA=&pr_do_wyplaty. where new_name = "&&na&i.";
+
+proc sql noprint;
+update work.period set  WOLUMEN=&wolumen. where new_name = "&&na&i.";
+
+proc sql noprint;
+   select sum(&PROWIZJA.) into : prowizja_cshort
+    from &&zb&i. t1, work.slo t2
+      where (t1.DEALER_ID_BS = t2.RAPORTOWANA_NA AND t1.DEALER_ID_BS = t2.DEALER_ID 
+         AND (t1.DEALER_ID_BS is not missing and t2.dealer_id is not missing)) AND t2.CUSTCODE = "&c_short.";
+
+ 
+
+proc sql noprint;
+
+   select count(*) into : ilosc_agent
+    from &&zb&i. t1, work.slo t2
+      where (t1.DEALER_ID_BS = t2.RAPORTOWANA_NA AND t1.DEALER_ID_BS = t2.DEALER_ID
+          AND (t1.DEALER_ID_BS is not missing and t2.dealer_id is not missing))
+            AND t2.CUSTCODE = "&c_short." AND _DELTA is missing AND &prowizja. is not missing;
+
+ 
+
+proc sql noprint;
+update work.period set  PROWIZJA_AGENT=&prowizja_cshort. where new_name = "&&na&i.";
+quit;
+
+ 
+
+proc sql noprint;
+update work.period set  WOLUMEN_AGENT=&ilosc_agent. where new_name = "&&na&i.";
+quit;
+
+%end;
+
+data period;
+set period;
+if missing(prowizja) then delete;
+
+run;
+
+%mend;
+%samp;
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
