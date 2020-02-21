@@ -1,0 +1,67 @@
+%web_drop_table(WORK.IMPORT);
+FILENAME REFFILE '/home/u45323982/sasuser.v94/historia_kontaktu.xlsx';
+
+PROC IMPORT DATAFILE=REFFILE
+	DBMS=XLSX
+	OUT=WORK.IMPORT;
+	GETNAMES=YES;
+RUN;
+
+PROC CONTENTS DATA=WORK.IMPORT; RUN;
+
+
+%web_open_table(WORK.IMPORT);
+FILENAME REFFILE '/home/u45323982/sasuser.v94/tabela_transakcji.xlsx';
+
+PROC IMPORT DATAFILE=REFFILE
+	DBMS=XLSX
+	OUT=WORK.IMPORT1;
+	GETNAMES=YES;
+RUN;
+
+PROC CONTENTS DATA=WORK.IMPORT1; RUN;
+
+%web_open_table(WORK.IMPORT1);
+
+options mprint symbolgen mlogic;
+%let start_promocji = 2018-02-01;
+%let start_promocjiW=%sysfunc(inputn(&start_promocji, yymmdd10.), date9.);
+%let koniec_promocji = 2018-02-14;
+%let koniec_promocjiW=%sysfunc(inputn(&koniec_promocji, yymmdd10.), date9.);
+
+proc sql;
+	create table tmp1 as select * from import t1 left join import1 t2 on 
+		t1.id_klienta=t2.id_klienta;
+	run;
+
+data tmp2;
+	length grupa $10;
+	format grupa $10.;
+
+	/* informat grupa $10.; */
+	set tmp1;
+	okres_promocji='NIE';
+	zrobil_zakupy='TAK';
+run;
+
+proc sql noprint;
+	update work.tmp2 set okres_promocji='TAK' where data_zakupu between 
+		"&start_promocjiW."d and "&koniec_promocjiW."d;
+	update work.tmp2 set zrobil_zakupy='NIE' where data_zakupu eq .;
+	update work.tmp2 set grupa='Testowa' where grupa eq 'Sent';
+	update work.tmp2 set grupa='Kontrolna' where grupa eq 'Control';
+
+proc means data=tmp2 Mean sum Std Min Max maxdec=2;
+	where zrobil_zakupy='TAK';
+	title Raport skuteczności marketingowej - wartościowy;
+	var kwota_zakupu;
+	class grupa okres_promocji;
+run;
+
+/* ods path sashelp.tmplmst(read); */
+ODS NOPROCTITLE;
+
+proc freq data=tmp2;
+	title Raport skutecznosci marketingowej - ilościowy;
+	tables grupa*zrobil_zakupy*okres_promocji / norow nocol;
+run;
